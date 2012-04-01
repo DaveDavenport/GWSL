@@ -1,0 +1,227 @@
+requires 2.0.0
+
+%headertop{
+#include <stdio.h>
+#include <string.h>
+#include <usb.h>
+#include "wsl-transmitter.h"
+%}
+
+%{
+typedef struct _data_package
+{
+	unsigned char msg1;
+	unsigned int id : 16;
+	unsigned char msg3;
+} data_package;
+
+%}
+class Wsl:Main from G:Object {
+	private struct usb_dev_handle *wsl_handle = {NULL};
+	public GList *transmitter_list = {NULL};
+	public
+	WslMain * new(void)
+	{
+		return (WslMain *)GET_NEW;
+	}
+	/**
+	 * Initialize. Make sure usb is running, and we 'intergrate' in main loop 
+	 */
+	init (self)
+	{
+		usb_init();
+		/** Check for updates every 1/2 second */
+		g_timeout_add(100, (GSourceFunc )(self_check_device), self); 
+		printf("WslMain init\n");
+	}
+	/**
+	 * Usb handling Functions
+	 */
+	private
+	gboolean get_and_open_weasel(self)
+	{
+		struct usb_device *wsl = self_find_weasel();	
+		if(wsl)
+		{
+			printf("Found weasel\n");
+			self->_priv->wsl_handle = usb_open(wsl);
+			if(self->_priv->wsl_handle) {
+				if(usb_set_configuration(self->_priv->wsl_handle, 1) >= 0){
+					if(usb_claim_interface(self->_priv->wsl_handle, 0) >=0){
+						/* We have the device, now let us all rejoice */
+						char string[256];
+						int ret;
+						printf("device found\n");
+						/** Try to get device name, it's nice if a popup can show that nicely */
+						ret = usb_get_string_simple(self->_priv->wsl_handle, wsl->descriptor.iProduct, string, 256);
+						if(ret >0)
+							self_device_found(self,string);
+						else
+							self_device_found(self,NULL);
+						return TRUE;
+					} else { /* usb claim interface */
+						printf("Failed to cleam weasel: '%s'\n", usb_strerror());
+					}
+				} else { /* usb_set_configuration */
+					printf("Failed to set configuration: '%s'\n", usb_strerror());
+				}
+				usb_close(self->_priv->wsl_handle);
+			} else { /* usb_open */
+				printf("failed to open weasel: '%s'\n", usb_strerror());
+			}
+		}
+		return FALSE;
+	}
+
+	private
+		struct usb_device * find_weasel(void)
+		{
+			struct usb_bus *bus;
+			struct usb_device *dev;
+
+			usb_find_busses();
+			usb_find_devices();
+			for (bus=usb_busses; bus; bus=bus->next) {
+				for (dev=bus->devices; dev; dev=dev->next) {
+					if ((dev->descriptor.idVendor==0x04b4) &&
+							(dev->descriptor.idProduct==0x7417))
+						return dev;
+				}
+			}
+			return NULL;
+		}
+
+	private
+	gboolean check_device (self)
+	{
+		if(self->transmitter_list)
+		{
+			g_list_foreach(self->transmitter_list, (GFunc)(wsl_transmitter_update),NULL);
+		}
+		/* No dongle allready found */
+		if(self->_priv->wsl_handle == NULL)
+		{
+			if(!self_get_and_open_weasel(self))
+			{
+				/* No new device found, no use continuing */
+				return TRUE;
+			}
+		}
+		else
+		{
+			/* We have a device */
+	//			char buffer[4];
+			data_package buffer;
+			int cnt;
+			do{
+				cnt = usb_interrupt_read(self->_priv->wsl_handle,1,&buffer, 4, 50);
+				if(cnt < 0)
+				{
+					/** Error handling */
+					if(cnt == -19) /** unplug */
+					{
+						self_device_removed(self);
+						usb_close(self->_priv->wsl_handle);
+						self->_priv->wsl_handle = NULL;
+					}
+
+				}
+				else if(cnt == 4)
+				{
+//					unsigned int id1 = buffer[1];
+//					unsigned int id2 = buffer[2];
+//					unsigned int id =(id1<<8)+id2; /** The transmitter id */
+					unsigned int id = buffer.id;
+					int act = (buffer.msg1 == 8 && buffer.msg3 ==1); /** the message type */
+					/** 
+					 * check if begin and end values are valid options
+					 * So if it's not, we can safely discard
+					 */
+					printf("(id %u) %i %i\n",id, buffer.msg1, buffer.msg3);
+					if(id >0 && (buffer.msg1==0 || buffer.msg1== 8) && 
+							(buffer.msg3 == 1 || buffer.msg3 == 0))
+					{
+
+
+						WslTransmitter *wt = self_get_transmitter_from_id(self,id);
+						if(act && wt == NULL) /** A trasnmitter is turned on, and no transmitter found */
+						{
+							wt = self_add_transmitter(self, id);		
+							wsl_transmitter_set_in_range(wt, TRUE);
+							/** 
+							 * Send signal */
+							self_transmitter_found(self, wt);
+						}else if(wt){ /* heartbeat */
+							wsl_transmitter_heartbeat(wt);	
+						}
+
+						printf("intlist: %u:%u\n", id, act); 
+					}
+					else
+					{
+						printf("Failed packet\n");
+					}
+				}
+			}while(cnt>0);
+		}
+		return TRUE;
+	}
+
+	signal last NONE (POINTER)
+		void transmitter_found(self, WslTransmitter *wt)
+		{
+			printf("***SIGNAL*** Transmitter added: '%i'\n", wsl_transmitter_get_id(wt));
+
+		}
+
+	public
+		WslTransmitter *add_transmitter(self, int id)
+		{
+			WslTransmitter *wt = wsl_transmitter_new(id);
+			self->transmitter_list = g_list_append(self->transmitter_list,wt);
+			printf("%p test\n", self->transmitter_list);
+			return wt;
+		}
+	private
+		WslTransmitter * get_transmitter_from_id(self, int id)
+		{
+			WslTransmitter *wt= NULL;
+			if(self->transmitter_list)
+			{
+				GList *node = g_list_first(self->transmitter_list);
+				for(;node;node = g_list_next(node))
+				{
+					wt = node->data;
+					if(wsl_transmitter_get_id(wt) == id)
+						return wt;
+				}
+			}
+			return NULL;
+		}
+	signal last NONE (NONE)
+		void device_removed(self)
+		{	
+			printf("**SIGNAL** Device unplugged\n");
+
+
+		}
+
+
+	signal last NONE (STRING)
+		void 
+		device_found(self, gchar *name)
+		{
+			printf("**SIGNAL** Device found: '%s'\n",name);
+
+
+		}
+	public
+	gboolean has_dongle(self)
+	{
+		if(self->_priv->wsl_handle) {
+			return TRUE;
+		} else {
+			return FALSE;
+		}
+	}
+}

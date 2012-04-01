@@ -1,0 +1,88 @@
+requires 2.0.0
+
+%headertop{
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+%}
+
+class Wsl:Transmitter from G:Object {
+	public int id ={ 0};
+	public int in_range = {-1};
+	private time_t last_time = {0};
+
+	property INT id 
+		(nick = "id",
+		blurb = "Id of transmitter",
+		default_value = 0,
+		export,
+		link);
+	property INT in_range
+		(nick = "in_range",
+		blurb = "In range indicator",
+		default_value = -1,
+		export,
+		link); 
+
+	public
+	WslTransmitter *new(int id)
+	{
+		WslTransmitter *val = GET_NEW;
+		wsl_transmitter_set_id(val, id);
+		return val;
+	}
+
+	init(self)
+	{
+		self->_priv->last_time = time(NULL);
+	}
+
+	signal last NONE (NONE)
+	void locked(self)
+	{
+		printf("**SIGNAL** locked '%u'\n", self->id);
+
+	}
+	signal last NONE (NONE)
+	void unlocked(self)
+	{
+			printf("**SIGNAL** unlocked '%u'\n",self->id);
+	
+	}
+
+	public
+	void update(self)
+	{
+		time_t now = time(NULL);
+		int status = -1;
+		if((now - self->_priv->last_time) > 10)
+		{
+			status = 0;
+		}
+		if(status >= 0 && self->in_range != status)
+		{
+			self->in_range = 0;
+			self_locked(self);
+		}
+		if(self->in_range == -1)
+		{
+			self->in_range = 0;
+		}
+	}
+
+	public
+	void heartbeat(self)
+	{
+		self->_priv->last_time = time(NULL);
+		if(self->in_range == 0)
+		{
+			self->in_range = 1;
+			self_unlocked(self);
+		}
+		else if(self->in_range == -1) /** not initialized */
+		{
+			self->in_range = 1;
+		}
+		return;
+	}
+}
