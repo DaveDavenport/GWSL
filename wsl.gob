@@ -128,25 +128,20 @@ class Wsl:Main from G:Object {
 				}
 				else if(cnt == 4)
 				{
-//					unsigned int id1 = buffer[1];
-//					unsigned int id2 = buffer[2];
-//					unsigned int id =(id1<<8)+id2; /** The transmitter id */
-					unsigned int id = buffer.id;
 					int act = (buffer.msg1 == 8 && buffer.msg3 ==1); /** the message type */
 					/** 
 					 * check if begin and end values are valid options
 					 * So if it's not, we can safely discard
 					 */
-					printf("(id %u) %i %i\n",id, buffer.msg1, buffer.msg3);
-					if(id >0 && (buffer.msg1==0 || buffer.msg1== 8) && 
+					if(buffer.id >0 && (buffer.msg1==0 || buffer.msg1== 8) && 
 							(buffer.msg3 == 1 || buffer.msg3 == 0))
 					{
 
 
-						WslTransmitter *wt = self_get_transmitter_from_id(self,id);
+						WslTransmitter *wt = self_get_transmitter_from_id(self,buffer.id);
 						if(act && wt == NULL) /** A trasnmitter is turned on, and no transmitter found */
 						{
-							wt = self_add_transmitter(self, id);		
+							wt = self_add_transmitter(self, buffer.id);		
 							wsl_transmitter_set_in_range(wt, TRUE);
 							/** 
 							 * Send signal */
@@ -154,8 +149,6 @@ class Wsl:Main from G:Object {
 						}else if(wt){ /* heartbeat */
 							wsl_transmitter_heartbeat(wt);	
 						}
-
-						printf("intlist: %u:%u\n", id, act); 
 					}
 					else
 					{
